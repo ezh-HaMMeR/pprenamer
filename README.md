@@ -11,7 +11,7 @@ N {number} - {recipient} - {amount} руб.pdf
 Пример:
 
 ```text
-N 210 - ИП Левова Юлия Владимировна - 19 200-00 руб.pdf
+N 007 - ИП Пупкин Василий Васильевич - 10 322-00 руб.pdf
 ```
 
 ## Что умеет
@@ -50,22 +50,16 @@ setup_and_run.bat
 
 ## Сборка EXE
 
-Обычная сборка папкой:
+Сборка в один файл:
 
 ```bat
-build_exe.bat
+build_exe_onefile.bat
 ```
 
 После сборки EXE будет здесь:
 
 ```text
 dist\PaymentRenamer\PaymentRenamer.exe
-```
-
-Сборка в один файл:
-
-```bat
-build_exe_onefile.bat
 ```
 
 ## Важное про RAR
