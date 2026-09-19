@@ -70,16 +70,42 @@ def extract_payment_number(text: str) -> str:
 
 
 def extract_payment_date(text: str) -> str:
-    # Если возможно, предпочитаем дату из той же строки, где находится заголовок платежного поручения.
+    """Извлекает дату самого платежного поручения, а не дату выгрузки PDF."""
     header_re = re.compile(r"ПЛАТ[ЕЁ]ЖНОЕ\s+ПОРУЧЕНИЕ\s*№", flags=re.IGNORECASE)
-    for raw_line in text.splitlines():
-        line = re.sub(r"\s+", " ", raw_line.replace("\xa0", " ")).strip()
+    date_re = re.compile(r"\b\d{2}\.\d{2}\.\d{4}\b")
+    lines = normalize_lines(text)
+
+    header_index: int | None = None
+    for index, line in enumerate(lines):
         if header_re.search(line):
-            dates = re.findall(r"\b\d{2}\.\d{2}\.\d{4}\b", line)
+            header_index = index
+            dates = date_re.findall(line)
             if dates:
                 return dates[-1]
+            break
 
-    dates = re.findall(r"\b\d{2}\.\d{2}\.\d{4}\b", text)
+    if header_index is not None:
+        # В PDF СберБизнес дата документа обычно извлекается сразу после
+        # заголовка, а дата формирования/выгрузки находится до него.
+        for line in lines[header_index + 1 : header_index + 10]:
+            dates = date_re.findall(line)
+            if dates:
+                return dates[0]
+            if line.lower() in {"сумма", "сумма прописью"}:
+                break
+
+        # В некоторых вариантах верстки значение даты идет непосредственно
+        # перед подписью поля "Дата".
+        for index in range(header_index + 1, min(len(lines), header_index + 15)):
+            if lines[index].lower() != "дата":
+                continue
+            for candidate in reversed(lines[header_index + 1 : index]):
+                dates = date_re.findall(candidate)
+                if dates:
+                    return dates[-1]
+
+    # Резерв для неизвестных форматов без распознанного заголовка.
+    dates = date_re.findall(text)
     return dates[0] if dates else ""
 
 
@@ -329,6 +355,7 @@ def looks_like_recipient(line: str) -> bool:
         "ПАО ",
         "ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ",
         "ИНДИВИДУАЛЬНЫЙ ПРЕДПРИНИМАТЕЛЬ",
+        "АКЦИОНЕРНОЕ ОБЩЕСТВО",
     )
     if any(token in upper for token in legal_tokens):
         return True
@@ -336,6 +363,84 @@ def looks_like_recipient(line: str) -> bool:
     words = re.findall(r"[А-ЯЁа-яё]+", line)
     # ФИО / получатель-самозанятый.
     return len(words) >= 2 and not any(word.lower() in {"г", "москва", "дата"} for word in words)
+
+
+def is_recipient_block_boundary(line: str) -> bool:
+    """Проверяет, началось ли после имени следующее поле платежного поручения."""
+    normalized = re.sub(r"\s+", " ", line).strip()
+    low = normalized.lower()
+
+    if low in {
+        "получатель",
+        "плательщик",
+        "назначение платежа",
+        "инн",
+        "кпп",
+        "бик",
+        "сч. №",
+        "вид оп.",
+        "наз. пл.",
+        "срок плат.",
+        "очер. плат.",
+        "код",
+        "рез. поле",
+    }:
+        return True
+
+    if re.match(r"^(?:ИНН|КПП|БИК|Сч\.?\s*№|Вид\s+оп\.|Наз\.\s*пл\.|Код\b|Рез\.\s*поле)", normalized, re.IGNORECASE):
+        return True
+
+    if low.startswith(
+        (
+            "оплата ",
+            "личные средства",
+            "зачисление ",
+            "перечисление ",
+            "возврат ",
+            "комиссия ",
+            "взносы ",
+        )
+    ):
+        return True
+
+    return bool(re.fullmatch(r"\d{8,25}", normalized))
+
+
+def recipient_name_from_range(
+    lines: list[str],
+    start: int,
+    end: int,
+    *,
+    trusted_recipient_block: bool = False,
+) -> str | None:
+    """Собирает имя получателя из нескольких соседних строк одного блока."""
+    parts: list[str] = []
+    safe_start = max(0, start)
+    safe_end = min(len(lines), end)
+
+    for candidate in lines[safe_start:safe_end]:
+        if is_recipient_block_boundary(candidate):
+            if parts:
+                break
+            continue
+
+        words = re.findall(r"[А-ЯЁа-яё]+", candidate)
+        is_text_in_trusted_block = (
+            trusted_recipient_block
+            and len(words) >= 2
+            and not is_bank_name(candidate)
+        )
+
+        if looks_like_recipient(candidate) or is_text_in_trusted_block:
+            parts.append(candidate.strip())
+            # Названия длиннее четырех строк в платежной форме практически не
+            # встречаются; ограничение не дает захватить следующий текстовый блок.
+            if len(parts) >= 4:
+                break
+        elif parts:
+            break
+
+    return " ".join(parts) if parts else None
 
 
 def extract_payer(lines: list[str]) -> str:
@@ -356,28 +461,29 @@ def extract_recipient(lines: list[str], text: str) -> str:
     # Оплата ...
     for i, line in enumerate(lines):
         if line.lower() == "получатель":
-            for candidate in lines[i + 1 : i + 8]:
-                if looks_like_recipient(candidate):
-                    return candidate
-                if candidate.lower().startswith(("оплата ", "личные средства")):
-                    break
+            recipient = recipient_name_from_range(
+                lines,
+                i + 1,
+                i + 9,
+                trusted_recipient_block=True,
+            )
+            if recipient:
+                return recipient
 
     # Частая построчная структура в некоторых банках:
     # Метка банка получателя, строка ИНН, затем фактический получатель перед меткой поля 'Получатель'.
     for i, line in enumerate(lines):
         if "банк получателя" in line.lower():
-            for candidate in lines[i + 1 : i + 20]:
-                if candidate.lower() == "получатель":
-                    break
-                if looks_like_recipient(candidate):
-                    return candidate
+            recipient = recipient_name_from_range(lines, i + 1, i + 20)
+            if recipient:
+                return recipient
 
     # Используем блок ИНН получателя: после строки ИНН/КПП часто идет название получателя.
     for i, line in enumerate(lines):
         if re.search(r"\bИНН\s+\d{10,12}\b", line, flags=re.IGNORECASE):
-            for candidate in lines[i + 1 : i + 6]:
-                if looks_like_recipient(candidate):
-                    return candidate
+            recipient = recipient_name_from_range(lines, i + 1, i + 6)
+            if recipient:
+                return recipient
 
     # Последний резервный вариант: берем кандидата прямо перед текстом назначения, если он есть.
     purpose_index = None
@@ -397,14 +503,26 @@ def clean_recipient_name(name: str, *, title_case_person_names: bool = True) -> 
     name = re.sub(r"\s+", " ", name.strip())
 
     name = re.sub(
-        r'ОБЩЕСТВО\s+С\s+ОГРАНИЧЕННОЙ\s+ОТВЕТСТВЕННОСТЬЮ\s+"?([^"\n]+)"?',
-        r"ООО \1",
+        r"\bОБЩЕСТВО\s+С\s+ОГРАНИЧЕННОЙ\s+ОТВЕТСТВЕННОСТЬЮ\b",
+        "ООО",
         name,
         flags=re.IGNORECASE,
     )
     name = re.sub(
-        r"ИНДИВИДУАЛЬНЫЙ\s+ПРЕДПРИНИМАТЕЛЬ\s+(.+)",
-        r"ИП \1",
+        r"\bИНДИВИДУАЛЬНЫЙ\s+ПРЕДПРИНИМАТЕЛЬ\b",
+        "ИП",
+        name,
+        flags=re.IGNORECASE,
+    )
+    name = re.sub(
+        r"\bПУБЛИЧНОЕ\s+АКЦИОНЕРНОЕ\s+ОБЩЕСТВО\b",
+        "ПАО",
+        name,
+        flags=re.IGNORECASE,
+    )
+    name = re.sub(
+        r"\bАКЦИОНЕРНОЕ\s+ОБЩЕСТВО\b",
+        "АО",
         name,
         flags=re.IGNORECASE,
     )
