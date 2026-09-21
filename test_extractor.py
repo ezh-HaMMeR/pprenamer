@@ -1,6 +1,6 @@
 import unittest
 
-from extractor import clean_recipient_name, extract_payment_date, extract_recipient
+from extractor import clean_recipient_name, extract_payment_date, extract_recipient, looks_like_recipient
 
 
 class PaymentDateExtractionTests(unittest.TestCase):
@@ -24,6 +24,25 @@ class PaymentDateExtractionTests(unittest.TestCase):
 
 
 class RecipientExtractionTests(unittest.TestCase):
+    def test_extracts_recipient_above_label_and_ignores_seal_placeholder(self) -> None:
+        lines = [
+            "Банк получателя",
+            "ИНН 9715462521",
+            'ООО "ТОЛСТОЙ"',
+            "Вид оп.",
+            "01",
+            "Наз. пл.",
+            "Получатель",
+            "Оплата по заказу клиента",
+            "Назначение платежа",
+            "Подписи",
+            "Отметки банка",
+            "М.П.",
+        ]
+
+        self.assertEqual(extract_recipient(lines, "\n".join(lines)), 'ООО "ТОЛСТОЙ"')
+        self.assertFalse(looks_like_recipient("М.П."))
+
     def test_extracts_recipient_split_across_two_lines(self) -> None:
         lines = [
             "Банк Получателя",

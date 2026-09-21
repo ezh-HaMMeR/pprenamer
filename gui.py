@@ -31,6 +31,10 @@ from config import AppSettings, load_settings, save_settings
 from processor import open_folder, process_inputs
 
 
+APP_VERSION = "v2026.09.21"
+APP_DISPLAY_NAME = f"PP Renamer {APP_VERSION}"
+
+
 def resource_path(relative_path: str) -> str:
     """Возвращает путь к ресурсу при запуске из исходников и в режиме PyInstaller onefile."""
     if hasattr(sys, "_MEIPASS"):
@@ -260,7 +264,7 @@ class MainWindow(QMainWindow):
         self.processing_active = False
         self.exit_requested = False
 
-        self.setWindowTitle("PP Renamer v0.2b")
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.setMinimumSize(860, 560)
 
         self.drop_area = DropArea()
@@ -345,7 +349,7 @@ class MainWindow(QMainWindow):
             app.setWindowIcon(app_icon)
 
         self.tray = QSystemTrayIcon(app_icon, self)
-        self.tray.setToolTip("PP Renamer v0.1b")
+        self.tray.setToolTip(APP_DISPLAY_NAME)
 
         menu = QMenu()
         show_action = QAction("Показать", self)
@@ -493,7 +497,7 @@ class MainWindow(QMainWindow):
         self.thread = None
         if self.tray.isVisible():
             self.tray.showMessage(
-                "PP Renamer v0.1b",
+                APP_DISPLAY_NAME,
                 self.status_edit.text(),
                 QSystemTrayIcon.MessageIcon.Information,
                 3500,
@@ -513,7 +517,7 @@ class MainWindow(QMainWindow):
             if self.isMinimized() and self.settings.minimize_to_tray:
                 self.hide()
                 self.tray.showMessage(
-                    "PP Renamer v0.1b",
+                    APP_DISPLAY_NAME,
                     "Программа свернута в трей.",
                     QSystemTrayIcon.MessageIcon.Information,
                     2500,
@@ -529,7 +533,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
             self.tray.showMessage(
-                "PP Renamer v0.1b",
+                APP_DISPLAY_NAME,
                 "Программа продолжает работать в трее. Для выхода используйте меню трея.",
                 QSystemTrayIcon.MessageIcon.Information,
                 3000,

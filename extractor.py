@@ -330,9 +330,13 @@ def looks_like_recipient(line: str) -> bool:
         "срок плат.",
         "очер. плат.",
         "рез. поле",
+        "м.п.",
+        "м. п.",
     }
 
     if low in bad_exact:
+        return False
+    if re.fullmatch(r"м\s*\.\s*п\s*\.?", low):
         return False
     if low.startswith("оплата ") or low.startswith("личные средства"):
         return False
@@ -384,7 +388,14 @@ def is_recipient_block_boundary(line: str) -> bool:
         "очер. плат.",
         "код",
         "рез. поле",
+        "подписи",
+        "отметки банка",
+        "м.п.",
+        "м. п.",
     }:
+        return True
+
+    if re.fullmatch(r"м\s*\.\s*п\s*\.?", low):
         return True
 
     if re.match(r"^(?:ИНН|КПП|БИК|Сч\.?\s*№|Вид\s+оп\.|Наз\.\s*пл\.|Код\b|Рез\.\s*поле)", normalized, re.IGNORECASE):
@@ -412,6 +423,7 @@ def recipient_name_from_range(
     end: int,
     *,
     trusted_recipient_block: bool = False,
+    stop_at_boundary_before_name: bool = False,
 ) -> str | None:
     """Собирает имя получателя из нескольких соседних строк одного блока."""
     parts: list[str] = []
@@ -421,6 +433,8 @@ def recipient_name_from_range(
     for candidate in lines[safe_start:safe_end]:
         if is_recipient_block_boundary(candidate):
             if parts:
+                break
+            if stop_at_boundary_before_name:
                 break
             continue
 
@@ -465,6 +479,26 @@ def extract_recipient(lines: list[str], text: str) -> str:
                 lines,
                 i + 1,
                 i + 9,
+                trusted_recipient_block=True,
+                stop_at_boundary_before_name=True,
+            )
+            if recipient:
+                return recipient
+
+            # В некоторых формах Т-Банка значение поля напечатано выше его
+            # подписи: сначала название организации, затем служебные поля и
+            # только потом метка "Получатель". Ограничиваем поиск началом
+            # блока банка получателя, чтобы не захватить плательщика.
+            block_start = max(0, i - 20)
+            for candidate_index in range(i - 1, block_start - 1, -1):
+                if "банк получателя" in lines[candidate_index].lower():
+                    block_start = candidate_index + 1
+                    break
+
+            recipient = recipient_name_from_range(
+                lines,
+                block_start,
+                i,
                 trusted_recipient_block=True,
             )
             if recipient:
